@@ -11,10 +11,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -97,6 +101,38 @@ public class ApiExceptionHandler {
     public ResponseEntity<Problem> handleMissingHeader(MissingRequestHeaderException e) {
         return problem(HttpStatus.BAD_REQUEST.value(), "header-required",
                 "required header '" + e.getHeaderName() + "' is missing",
+                Collections.<String>emptyList());
+    }
+
+    /**
+     * A query or path value that does not convert — {@code ?status=BOGUS}, a non-numeric
+     * {@code limit}. The caller's mistake, so it must not fall through to the 500 below.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Problem> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return problem(HttpStatus.BAD_REQUEST.value(), "parameter-invalid",
+                "parameter '" + e.getName() + "' has an invalid value: " + e.getValue(),
+                Collections.<String>emptyList());
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Problem> handleMissingParameter(MissingServletRequestParameterException e) {
+        return problem(HttpStatus.BAD_REQUEST.value(), "parameter-required",
+                "required parameter '" + e.getParameterName() + "' is missing",
+                Collections.<String>emptyList());
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Problem> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        return problem(HttpStatus.METHOD_NOT_ALLOWED.value(), "method-not-allowed",
+                "method " + e.getMethod() + " is not supported on this resource",
+                Collections.<String>emptyList());
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<Problem> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        return problem(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(), "unsupported-media-type",
+                "request bodies must be sent as application/json",
                 Collections.<String>emptyList());
     }
 

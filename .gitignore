@@ -1,0 +1,11 @@
+# build output
+target/
+
+# local H2 database — recreated on startup
+data/
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.iml

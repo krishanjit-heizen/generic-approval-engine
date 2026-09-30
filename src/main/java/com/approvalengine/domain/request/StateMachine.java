@@ -59,14 +59,16 @@ public final class StateMachine {
                 StageStatus.ACTIVE,
                 StageStatus.SKIPPED,
                 // A pending stage is abandoned when an earlier stage terminates the request.
-                StageStatus.REJECTED));
+                StageStatus.REJECTED,
+                StageStatus.CANCELLED));
         stage.put(StageStatus.ACTIVE, EnumSet.of(
                 StageStatus.APPROVED,
                 StageStatus.REJECTED,
                 StageStatus.EXPIRED,
                 StageStatus.RETURNED,
                 // An SLA policy can resolve an active stage away without a human decision.
-                StageStatus.SKIPPED));
+                StageStatus.SKIPPED,
+                StageStatus.CANCELLED));
         // Re-planning after a resubmission: a changed context can make a stage that was
         // skipped at creation applicable, or vice versa. This is the only edge that leaves
         // SKIPPED, and it exists so that an approver saying "reduce this below the Director
@@ -79,6 +81,7 @@ public final class StateMachine {
         // what happened the first time.
         stage.put(StageStatus.REJECTED, Collections.<StageStatus>emptySet());
         stage.put(StageStatus.RETURNED, Collections.<StageStatus>emptySet());
+        stage.put(StageStatus.CANCELLED, Collections.<StageStatus>emptySet());
         STAGE_TRANSITIONS = Collections.unmodifiableMap(stage);
 
         Map<TaskStatus, Set<TaskStatus>> task = new EnumMap<TaskStatus, Set<TaskStatus>>(TaskStatus.class);

@@ -129,55 +129,54 @@ public class StartupRecoveryService {
         int resumed = 0;
         for (ApprovalRequestEntity candidate : stalled) {
             // One transaction per request: a single unrecoverable request must not roll back
-            // the others.
-            Boolean ok = transaction.execute(status -> recoverOne(candidate.getId()));
-            if (Boolean.TRUE.equals(ok)) {
-                resumed++;
+            // the others. The failure is caught out here, after the template has rolled back:
+            // catching it inside would commit a half-finished re-drive.
+            try {
+                Boolean ok = transaction.execute(status -> recoverOne(candidate.getId()));
+                if (Boolean.TRUE.equals(ok)) {
+                    resumed++;
+                }
+            } catch (RuntimeException e) {
+                log.error("failed to recover request {}", candidate.getId(), e);
             }
         }
         return resumed;
     }
 
     private boolean recoverOne(String requestId) {
-        try {
-            // Row-locked, in case an approver's action arrives at the same moment.
-            Optional<ApprovalRequestEntity> found = requests.findByIdForUpdate(requestId);
-            if (!found.isPresent()) {
-                return false;
-            }
-            ApprovalRequestEntity request = found.get();
-
-            // Re-checked under the lock: a concurrent action may already have moved it on
-            // between the scan and now.
-            if (request.getStatus() != RequestStatus.IN_PROGRESS) {
-                return false;
-            }
-
-            Optional<ApplicationEntity> application = applications.findById(request.getAppId());
-            if (!application.isPresent()) {
-                log.error("cannot recover request {} — application {} no longer exists",
-                        requestId, request.getAppId());
-                return false;
-            }
-
-            WorkflowDocument document = workflows.parse(workflows.requireById(request.getWorkflowDefId()));
-            ExecutionContext ctx = new ExecutionContext(request, application.get(), document,
-                    EvaluationContext.of(json.readMap(request.getContextJson()),
-                            request.getRequestedBy()));
-
-            audit.record(requestId, AuditWriter.SYSTEM_ACTOR, AuditAction.REQUEST_RECOVERED,
-                    requestId, RequestStatus.IN_PROGRESS, RequestStatus.IN_PROGRESS,
-                    "resumed after an engine restart interrupted execution",
-                    AuditWriter.metadata("currentStageIndex",
-                            Integer.valueOf(request.getCurrentStageIndex())));
-
-            executor.resume(ctx, AuditWriter.SYSTEM_ACTOR);
-            log.info("resumed request {}", requestId);
-            return true;
-
-        } catch (RuntimeException e) {
-            log.error("failed to recover request {}", requestId, e);
+        // Row-locked, in case an approver's action arrives at the same moment.
+        Optional<ApprovalRequestEntity> found = requests.findByIdForUpdate(requestId);
+        if (!found.isPresent()) {
             return false;
         }
+        ApprovalRequestEntity request = found.get();
+
+        // Re-checked under the lock: a concurrent action may already have moved it on
+        // between the scan and now.
+        if (request.getStatus() != RequestStatus.IN_PROGRESS) {
+            return false;
+        }
+
+        Optional<ApplicationEntity> application = applications.findById(request.getAppId());
+        if (!application.isPresent()) {
+            log.error("cannot recover request {} — application {} no longer exists",
+                    requestId, request.getAppId());
+            return false;
+        }
+
+        WorkflowDocument document = workflows.parse(workflows.requireById(request.getWorkflowDefId()));
+        ExecutionContext ctx = new ExecutionContext(request, application.get(), document,
+                EvaluationContext.of(json.readMap(request.getContextJson()),
+                        request.getRequestedBy()));
+
+        audit.record(requestId, AuditWriter.SYSTEM_ACTOR, AuditAction.REQUEST_RECOVERED,
+                requestId, RequestStatus.IN_PROGRESS, RequestStatus.IN_PROGRESS,
+                "resumed after an engine restart interrupted execution",
+                AuditWriter.metadata("currentStageIndex",
+                        Integer.valueOf(request.getCurrentStageIndex())));
+
+        executor.resume(ctx, AuditWriter.SYSTEM_ACTOR);
+        log.info("resumed request {}", requestId);
+        return true;
     }
 }

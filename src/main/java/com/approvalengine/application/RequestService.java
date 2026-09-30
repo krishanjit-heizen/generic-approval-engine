@@ -216,11 +216,10 @@ public class RequestService {
         ExecutionContext ctx = new ExecutionContext(request, application, document,
                 EvaluationContext.of(json.readMap(request.getContextJson()), request.getRequestedBy()));
 
-        // resume() re-attempts the stage the request is actually sitting on, rather than
-        // advancing past it. Reusing the recovery path is deliberate: "figure out where this
-        // request is and carry on" is the same problem whether the interruption was a crash
-        // or an unstaffable stage, and one implementation cannot drift from the other.
-        executor.resume(ctx, actor);
+        // Re-attempts the stage the request is actually sitting on, rather than advancing past
+        // it. This defers to the recovery path for everything except a stage whose approvers
+        // are all spent, which recovery would reject and a rescue must re-staff instead.
+        executor.reassign(ctx, actor);
         return request;
     }
 

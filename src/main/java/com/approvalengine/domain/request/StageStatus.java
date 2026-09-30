@@ -35,7 +35,15 @@ public enum StageStatus {
      * and will resume. When they resubmit, a new attempt of this stage is created and this
      * row stays as the record of the first pass.
      */
-    RETURNED;
+    RETURNED,
+
+    /**
+     * The request was withdrawn before this stage was decided.
+     *
+     * <p>Distinct from REJECTED for the same reason RETURNED is: nobody rejected anything, and
+     * a record saying an approver did would be wrong in the one place it must not be.
+     */
+    CANCELLED;
 
     public boolean isTerminal() {
         return this != PENDING && this != ACTIVE;

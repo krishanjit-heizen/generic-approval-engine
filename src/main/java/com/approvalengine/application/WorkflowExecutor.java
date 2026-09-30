@@ -385,6 +385,33 @@ public class WorkflowExecutor {
         }
     }
 
+    /**
+     * Re-staffs the stage a parked request is sitting on.
+     *
+     * <p>Differs from {@link #resume} in one case: an ACTIVE stage with nobody left to ask,
+     * which is what a failed SLA escalation leaves behind. {@code resume} reads that as
+     * "everyone was heard and the policy was not met" and rejects — correct after a crash,
+     * but the opposite of what an operator rescuing the request wants. Here the spent attempt
+     * is closed as EXPIRED and a fresh one is opened, so approvers are resolved again against
+     * the directory as it stands now.
+     */
+    public void reassign(ExecutionContext ctx, String actor) {
+        int index = ctx.getRequest().getCurrentStageIndex();
+        StageInstanceEntity instance = index < 0 || index >= ctx.stageCount()
+                ? null
+                : latestAttempt(ctx.requestId(), index);
+
+        if (instance == null || instance.getStatus() != StageStatus.ACTIVE
+                || evaluateStage(ctx, instance, index) != StageOutcome.UNSATISFIABLE) {
+            resume(ctx, actor);
+            return;
+        }
+
+        markStage(ctx, instance, StageStatus.EXPIRED, AuditAction.STAGE_EXPIRED,
+                "no approver remained on this attempt — reopened by reassignment", null);
+        goTo(ctx, index, actor, "reassigned after the stage could not be staffed");
+    }
+
     // ========================================================================
     // Stage completion
     // ========================================================================
@@ -401,9 +428,12 @@ public class WorkflowExecutor {
         StageDefinition definition = ctx.stageAt(index);
         CompletionPolicy policy = definition.getPolicy();
 
+        // EXPIRED is deliberately not counted. An expired task was handed to someone else by
+        // escalation, so counting both it and its replacement would make an ALL stage demand
+        // one more approval than there are people left to give it.
         long total = tasks.countByStageInstanceIdAndStatusIn(instance.getId(),
                 Arrays.asList(TaskStatus.WAITING, TaskStatus.PENDING, TaskStatus.APPROVED,
-                        TaskStatus.REJECTED, TaskStatus.CHANGES_REQUESTED, TaskStatus.EXPIRED));
+                        TaskStatus.REJECTED, TaskStatus.CHANGES_REQUESTED));
         long approved = tasks.countByStageInstanceIdAndStatus(instance.getId(), TaskStatus.APPROVED);
         long required = policy.requiredApprovals((int) total);
 
@@ -624,9 +654,7 @@ public class WorkflowExecutor {
             }
             cancelled += cancelOutstanding(instance, ctx, reason);
             if (instance.getStatus() == StageStatus.ACTIVE || instance.getStatus() == StageStatus.PENDING) {
-                instance.setStatus(StageStatus.REJECTED);
-                instance.setCompletedAt(Instant.now());
-                stages.save(instance);
+                markStage(ctx, instance, StageStatus.CANCELLED, AuditAction.STAGE_CANCELLED, reason, null);
             }
         }
         return cancelled;
@@ -652,9 +680,8 @@ public class WorkflowExecutor {
         for (int index = fromIndexExclusive + 1; index < ctx.stageCount(); index++) {
             StageInstanceEntity instance = latestAttempt(ctx.requestId(), index);
             if (instance != null && instance.getStatus() == StageStatus.PENDING) {
-                instance.setStatus(StageStatus.REJECTED);
-                instance.setCompletedAt(Instant.now());
-                stages.save(instance);
+                markStage(ctx, instance, StageStatus.REJECTED, AuditAction.STAGE_REJECTED,
+                        "abandoned — an earlier stage rejected the request", null);
             }
         }
     }
@@ -674,9 +701,20 @@ public class WorkflowExecutor {
                         "resolutionNotes", notes));
     }
 
+    /**
+     * Persists the request and keeps the caller's instance in step with the row.
+     *
+     * <p>The bulk task updates (claim, cancel) clear the persistence context, which detaches
+     * the request the caller is holding. Saving a detached entity is a merge, and a merge
+     * bumps {@code @Version} on the managed copy only — so a second save in the same
+     * transaction would present the old version and fail as a stale write. A GOTO rejection
+     * saves twice (reposition, then activate), which is exactly that case. Flushing and
+     * copying the version back makes any number of saves per transaction safe.
+     */
     private void touch(ApprovalRequestEntity request) {
         request.setUpdatedAt(Instant.now());
-        requests.save(request);
+        ApprovalRequestEntity saved = requests.saveAndFlush(request);
+        request.setLockVersion(saved.getLockVersion());
     }
 
     // --- payload builders -------------------------------------------------

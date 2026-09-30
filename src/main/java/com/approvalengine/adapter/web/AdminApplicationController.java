@@ -2,6 +2,7 @@ package com.approvalengine.adapter.web;
 
 import com.approvalengine.adapter.persistence.entity.ApplicationEntity;
 import com.approvalengine.application.ApplicationRegistrationService;
+import com.approvalengine.error.ForbiddenException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.Getter;
@@ -24,9 +25,11 @@ import java.util.List;
 /**
  * Onboarding endpoints for consuming applications.
  *
- * <p>Exempt from API-key authentication, because this is where a key comes from. In a real
- * deployment these belong behind operator authentication or a provisioning pipeline — that
- * gap is intentional for local development and is documented rather than glossed over.
+ * <p>Registering and listing are exempt from API-key authentication, because this is where a
+ * key comes from. In a real deployment these belong behind operator authentication or a
+ * provisioning pipeline — that gap is intentional for local development and is documented
+ * rather than glossed over. Rotation is not exempt: it returns a live secret, so an
+ * application may only rotate its own.
  */
 @RestController
 @RequestMapping("/api/v1/admin/applications")
@@ -54,7 +57,11 @@ public class AdminApplicationController {
     @Operation(summary = "Rotate the webhook signing secret",
             description = "The previous secret stays valid until the next rotation, so a consumer "
                     + "can deploy the new one without a synchronised cutover.")
-    public RegistrationResponse rotate(@PathVariable String appId) {
+    public RegistrationResponse rotate(CallerContext caller, @PathVariable String appId) {
+        if (!caller.getAppId().equals(appId)) {
+            throw new ForbiddenException("not-your-application",
+                    "an application can only rotate its own webhook secret");
+        }
         return RegistrationResponse.of(service.rotateWebhookSecret(appId));
     }
 

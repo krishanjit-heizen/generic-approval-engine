@@ -113,70 +113,71 @@ public class SlaSweeper {
 
         int handled = 0;
         for (ApprovalTaskEntity task : overdue) {
-            // One transaction per task, so one problem request cannot block the rest.
-            Boolean ok = transaction.execute(status -> handleOne(task.getId()));
-            if (Boolean.TRUE.equals(ok)) {
-                handled++;
+            // One transaction per task, so one problem request cannot block the rest. The
+            // failure is caught out here, after the template has rolled back: catching it
+            // inside would let the transaction commit whatever was written before it threw.
+            try {
+                Boolean ok = transaction.execute(status -> handleOne(task.getId()));
+                if (Boolean.TRUE.equals(ok)) {
+                    handled++;
+                }
+            } catch (RuntimeException e) {
+                log.error("failed to process overdue task {}", task.getId(), e);
             }
         }
         return handled;
     }
 
     private boolean handleOne(String taskId) {
-        try {
-            Optional<ApprovalTaskEntity> found = tasks.findById(taskId);
-            if (!found.isPresent()) {
-                return false;
-            }
-            ApprovalTaskEntity task = found.get();
-
-            // Row-locked, so the sweeper and a late-arriving approver cannot both act.
-            Optional<ApprovalRequestEntity> maybeRequest = requests.findByIdForUpdate(task.getRequestId());
-            if (!maybeRequest.isPresent()) {
-                return false;
-            }
-            ApprovalRequestEntity request = maybeRequest.get();
-
-            // Re-checked under the lock: the approver may have acted in the moment between the
-            // scan and now, in which case the deadline is moot.
-            if (request.getStatus() != RequestStatus.IN_PROGRESS
-                    || task.getStatus() != TaskStatus.PENDING) {
-                return false;
-            }
-
-            Optional<ApplicationEntity> application = applications.findById(request.getAppId());
-            if (!application.isPresent()) {
-                return false;
-            }
-
-            WorkflowDocument document = workflows.parse(workflows.requireById(request.getWorkflowDefId()));
-            ExecutionContext ctx = new ExecutionContext(request, application.get(), document,
-                    EvaluationContext.of(json.readMap(request.getContextJson()), request.getRequestedBy()));
-
-            int index = request.getCurrentStageIndex();
-            StageInstanceEntity instance = executor.latestAttempt(request.getId(), index);
-            if (instance == null || !instance.getId().equals(task.getStageInstanceId())
-                    || instance.getStatus() != StageStatus.ACTIVE) {
-                // The task belongs to a superseded attempt. Nothing to time out.
-                return false;
-            }
-
-            StageDefinition definition = ctx.stageAt(index);
-            switch (definition.getOnTimeout()) {
-                case NOTIFY_ONLY:
-                    return remind(ctx, task, definition);
-                case ESCALATE:
-                    return escalate(ctx, task, instance, index, definition);
-                case AUTO_APPROVE:
-                    return autoDecide(ctx, task, instance, index, TaskStatus.APPROVED);
-                case AUTO_REJECT:
-                    return autoDecide(ctx, task, instance, index, TaskStatus.REJECTED);
-                default:
-                    return false;
-            }
-        } catch (RuntimeException e) {
-            log.error("failed to process overdue task {}", taskId, e);
+        Optional<ApprovalTaskEntity> found = tasks.findById(taskId);
+        if (!found.isPresent()) {
             return false;
+        }
+        ApprovalTaskEntity task = found.get();
+
+        // Row-locked, so the sweeper and a late-arriving approver cannot both act.
+        Optional<ApprovalRequestEntity> maybeRequest = requests.findByIdForUpdate(task.getRequestId());
+        if (!maybeRequest.isPresent()) {
+            return false;
+        }
+        ApprovalRequestEntity request = maybeRequest.get();
+
+        // Re-checked under the lock: the approver may have acted in the moment between the
+        // scan and now, in which case the deadline is moot.
+        if (request.getStatus() != RequestStatus.IN_PROGRESS
+                || task.getStatus() != TaskStatus.PENDING) {
+            return false;
+        }
+
+        Optional<ApplicationEntity> application = applications.findById(request.getAppId());
+        if (!application.isPresent()) {
+            return false;
+        }
+
+        WorkflowDocument document = workflows.parse(workflows.requireById(request.getWorkflowDefId()));
+        ExecutionContext ctx = new ExecutionContext(request, application.get(), document,
+                EvaluationContext.of(json.readMap(request.getContextJson()), request.getRequestedBy()));
+
+        int index = request.getCurrentStageIndex();
+        StageInstanceEntity instance = executor.latestAttempt(request.getId(), index);
+        if (instance == null || !instance.getId().equals(task.getStageInstanceId())
+                || instance.getStatus() != StageStatus.ACTIVE) {
+            // The task belongs to a superseded attempt. Nothing to time out.
+            return false;
+        }
+
+        StageDefinition definition = ctx.stageAt(index);
+        switch (definition.getOnTimeout()) {
+            case NOTIFY_ONLY:
+                return remind(ctx, task, definition);
+            case ESCALATE:
+                return escalate(ctx, task, instance, index, definition);
+            case AUTO_APPROVE:
+                return autoDecide(ctx, task, instance, index, TaskStatus.APPROVED);
+            case AUTO_REJECT:
+                return autoDecide(ctx, task, instance, index, TaskStatus.REJECTED);
+            default:
+                return false;
         }
     }
 

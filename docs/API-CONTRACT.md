@@ -41,7 +41,7 @@ mistake:
 
 | Header | Required on | Meaning |
 |---|---|---|
-| `X-Api-Key` | everything except `POST /admin/applications` | Identifies and **authenticates** the calling application. Scopes every query — one application can never read another's data. Looked up by SHA-256 hash; the plaintext is never stored. |
+| `X-Api-Key` | everything except `POST` and `GET /admin/applications` | Identifies and **authenticates** the calling application. Scopes every query — one application can never read another's data. Looked up by SHA-256 hash; the plaintext is never stored. |
 | `X-Actor-Id` | any endpoint that records an action | Names the acting human. **Not authenticated** in this phase — see [§10.6](#106-the-actor-header-and-why-it-is-safe-enough). Never carries roles: the engine looks entitlements up from the id itself. |
 | `Idempotency-Key` | optional on `POST /requests` and `POST /requests/{id}/actions` | Makes a client retry safe. See [§10.1](#101-idempotency). |
 | `Content-Type` | any request with a body | `application/json` |
@@ -92,6 +92,7 @@ Every `type` the engine can return.
 | `type` | When |
 |---|---|
 | `not-your-task` | the task belongs to a different approver |
+| `not-your-application` | rotating the webhook secret of an application other than the caller's own |
 | `no-pending-task` | no `taskId` given and the actor holds nothing outstanding on this request |
 | `approver-no-longer-eligible` | the actor holds the task but has lost the role/team/department it was assigned through |
 | `approver-inactive` | the actor is unknown to the directory, or deactivated |
@@ -133,10 +134,14 @@ Every `type` the engine can return.
 |---|---|---|
 | `malformed-json` | 400 | body unparseable — includes an unknown `type` discriminator on a condition or approver |
 | `header-required` | 400 | a required header is missing |
+| `parameter-invalid` | 400 | a query or path value does not convert — `?status=BOGUS`, a non-numeric `limit` |
+| `parameter-required` | 400 | a required query parameter is missing |
+| `method-not-allowed` | 405 | the HTTP method is not supported on this resource |
+| `unsupported-media-type` | 415 | the body was not sent as `application/json` |
 | `request-invalid` | 400/422 | body failed validation; `errors` lists the fields |
 | `workflow-invalid` | 422 | definition is structurally invalid (duplicate stage ids, GOTO to nowhere, `QUORUM` with no count…) |
 | `workflow-references-unknown` | 422 | definition is structurally fine but names a role/team/department/user that does not exist |
-| `idempotency-key-reuse` | 422 | same key, different body |
+| `idempotency-key-reuse` | 422 | same key, different body — or, on an action, a different `X-Actor-Id` |
 | `actor-required` | 422 | endpoint records an action but no `X-Actor-Id` |
 | `action-required` | 422 | `action` missing or not one of the three verbs |
 | `comment-required` | 422 | `REQUEST_CHANGES` without a comment |
@@ -193,8 +198,9 @@ cutover. The engine signs with the new one immediately.
 
 | Scenario | Result |
 |---|---|
-| Valid | `200`, new secret returned once |
-| Unknown `appId` | `404 application-not-found` |
+| Valid, called with the application's own `X-Api-Key` | `200`, new secret returned once |
+| No `X-Api-Key` | `401 api-key-required` |
+| `appId` is not the caller's own | `403 not-your-application` |
 | Rotate twice in quick succession | The secret from **two** rotations ago stops being accepted. Only one overlap window is kept. |
 
 ## `GET /admin/applications`
@@ -506,6 +512,7 @@ stage can sit for weeks.
 | Request already terminal | `409 request-already-decided` |
 | Request `CHANGES_REQUESTED` or `NEEDS_ATTENTION` | `409 request-not-actionable` |
 | Retry with same `Idempotency-Key` | Stored response replayed; no second decision recorded |
+| Same `Idempotency-Key` from a different `X-Actor-Id` | `422 idempotency-key-reuse` |
 
 ## `GET /requests/{requestId}`
 
@@ -561,7 +568,7 @@ the **same transaction** as the change it describes, so history cannot drift fro
 Actions: `REQUEST_CREATED` `REQUEST_APPROVED` `REQUEST_REJECTED` `REQUEST_CANCELLED`
 `REQUEST_CHANGES_REQUESTED` `REQUEST_RESUBMITTED` `REQUEST_NEEDS_ATTENTION` `REQUEST_REASSIGNED`
 `REQUEST_RECOVERED` `STAGE_PLANNED` `STAGE_ACTIVATED` `STAGE_APPROVED` `STAGE_REJECTED`
-`STAGE_SKIPPED` `STAGE_EXPIRED` `STAGE_RETURNED` `STAGE_REOPENED` `TASK_ASSIGNED`
+`STAGE_SKIPPED` `STAGE_EXPIRED` `STAGE_RETURNED` `STAGE_CANCELLED` `STAGE_REOPENED` `TASK_ASSIGNED`
 `TASK_APPROVED` `TASK_REJECTED` `TASK_CHANGES_REQUESTED` `TASK_EXPIRED` `TASK_CANCELLED`
 `TASK_ESCALATED` `TASK_ACTION_REFUSED`.
 
@@ -757,7 +764,8 @@ and the reason approver rules are projected into rows rather than left inside JS
     "nextAttemptAt": "…", "sentAt": null } ]
 ```
 
-Never exposes the signing secret.
+Scoped to the calling application: only its own events are listed. Never exposes the signing
+secret.
 
 ## `GET /admin/outbox/summary`
 
@@ -769,7 +777,7 @@ count means a consumer needs attention.
 `202`. Requeues a dead-lettered notification and **resets the attempt counter**, so an operator
 who has fixed the consumer gets the full retry budget rather than one last try.
 
-`404 outbox-event-not-found` for an unknown id. Replaying an already-`SENT` event is permitted —
+`404 outbox-event-not-found` for an unknown id, or one that belongs to another application. Replaying an already-`SENT` event is permitted —
 delivery is at-least-once and consumers must dedupe on `eventId` regardless.
 
 ## `POST /admin/requests/{requestId}/reassign`

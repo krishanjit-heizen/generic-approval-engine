@@ -11,6 +11,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface OutboxEventRepository extends JpaRepository<OutboxEventEntity, String> {
 
@@ -73,9 +74,13 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEventEntity, 
             + "WHERE o.status = :pending AND o.leaseOwner IS NOT NULL AND o.leaseUntil < :now")
     int releaseExpiredLeases(@Param("pending") OutboxStatus pending, @Param("now") Instant now);
 
-    List<OutboxEventEntity> findByStatusOrderByCreatedAtDesc(OutboxStatus status, Pageable pageable);
+    /** Tenant-scoped: an application inspects its own deliveries, never another's. */
+    List<OutboxEventEntity> findByAppIdAndStatusOrderByCreatedAtDesc(
+            String appId, OutboxStatus status, Pageable pageable);
+
+    Optional<OutboxEventEntity> findByIdAndAppId(String id, String appId);
 
     List<OutboxEventEntity> findByRequestIdOrderByCreatedAtAsc(String requestId);
 
-    long countByStatus(OutboxStatus status);
+    long countByAppIdAndStatus(String appId, OutboxStatus status);
 }

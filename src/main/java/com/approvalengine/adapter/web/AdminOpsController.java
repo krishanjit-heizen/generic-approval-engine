@@ -60,11 +60,12 @@ public class AdminOpsController {
     @Operation(summary = "Inspect notification delivery",
             description = "Defaults to DEAD — the events that exhausted their retries and are "
                     + "waiting for someone to fix the consumer and replay them.")
-    public List<OutboxView> listOutbox(@RequestParam(defaultValue = "DEAD") OutboxStatus status,
+    public List<OutboxView> listOutbox(CallerContext caller,
+                                       @RequestParam(defaultValue = "DEAD") OutboxStatus status,
                                        @RequestParam(defaultValue = "50") int limit) {
         List<OutboxView> out = new ArrayList<OutboxView>();
-        for (OutboxEventEntity event : outbox.findByStatusOrderByCreatedAtDesc(
-                status, PageRequest.of(0, Math.min(Math.max(limit, 1), 200)))) {
+        for (OutboxEventEntity event : outbox.findByAppIdAndStatusOrderByCreatedAtDesc(
+                caller.getAppId(), status, PageRequest.of(0, Math.min(Math.max(limit, 1), 200)))) {
             out.add(OutboxView.of(event));
         }
         return out;
@@ -72,10 +73,10 @@ public class AdminOpsController {
 
     @GetMapping("/outbox/summary")
     @Operation(summary = "Counts by delivery status — a one-glance health check")
-    public Map<String, Long> outboxSummary() {
+    public Map<String, Long> outboxSummary(CallerContext caller) {
         Map<String, Long> counts = new LinkedHashMap<String, Long>();
         for (OutboxStatus status : OutboxStatus.values()) {
-            counts.put(status.name(), Long.valueOf(outbox.countByStatus(status)));
+            counts.put(status.name(), Long.valueOf(outbox.countByAppIdAndStatus(caller.getAppId(), status)));
         }
         return counts;
     }
@@ -85,8 +86,8 @@ public class AdminOpsController {
     @Operation(summary = "Requeue a dead-lettered notification",
             description = "Resets the attempt counter, so a consumer that has been fixed gets the "
                     + "full retry budget rather than one last try.")
-    public OutboxView replay(@PathVariable String eventId) {
-        return OutboxView.of(dispatcher.replay(eventId));
+    public OutboxView replay(CallerContext caller, @PathVariable String eventId) {
+        return OutboxView.of(dispatcher.replay(caller.getAppId(), eventId));
     }
 
     @PostMapping("/requests/{requestId}/reassign")

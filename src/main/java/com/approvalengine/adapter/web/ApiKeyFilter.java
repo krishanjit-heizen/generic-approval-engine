@@ -33,6 +33,10 @@ import java.util.Optional;
  * belongs behind operator authentication or a provisioning pipeline; leaving it open is a
  * local-development affordance and is recorded as such in the README, not treated as a
  * design position.
+ *
+ * <p>The exemption covers the collection itself and nothing beneath it. Operations on an
+ * existing application — rotating its webhook secret — hand out a credential, so they are
+ * authenticated like everything else.
  */
 @Component
 @Order(10)
@@ -43,16 +47,17 @@ public class ApiKeyFilter extends OncePerRequestFilter {
     static final String ACTOR_HEADER = "X-Actor-Id";
 
     /**
-     * Paths that carry no tenant scope: docs, the H2 console, and the bootstrap endpoint that
-     * mints the very first API key.
+     * Paths that carry no tenant scope: docs and the H2 console.
      */
     private static final List<String> EXEMPT_PREFIXES = Arrays.asList(
             "/v3/api-docs",
             "/swagger-ui",
             "/swagger-resources",
             "/webjars",
-            "/h2-console",
-            "/api/v1/admin/applications");
+            "/h2-console");
+
+    /** The bootstrap endpoint that mints the very first API key. Matched exactly. */
+    private static final String REGISTRATION_PATH = "/api/v1/admin/applications";
 
     private final ApplicationRepository applications;
     private final ObjectMapper objectMapper;
@@ -65,6 +70,9 @@ public class ApiKeyFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        if (path.equals(REGISTRATION_PATH) || path.equals(REGISTRATION_PATH + "/")) {
+            return true;
+        }
         for (String prefix : EXEMPT_PREFIXES) {
             if (path.startsWith(prefix)) {
                 return true;

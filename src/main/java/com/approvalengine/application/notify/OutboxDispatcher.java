@@ -219,9 +219,11 @@ public class OutboxDispatcher {
      * <p>Resets the attempt counter, so an operator who has fixed the consumer gets the full
      * retry budget again rather than one last try.
      */
-    public OutboxEventEntity replay(String eventId) {
+    public OutboxEventEntity replay(String appId, String eventId) {
         return transaction.execute(status -> {
-            OutboxEventEntity event = outbox.findById(eventId).orElseThrow(
+            // Scoped to the caller, and a miss reads the same as "no such event" — another
+            // application's event id must not be distinguishable from one that does not exist.
+            OutboxEventEntity event = outbox.findByIdAndAppId(eventId, appId).orElseThrow(
                     () -> new com.approvalengine.error.NotFoundException("outbox-event-not-found",
                             "no outbox event " + eventId));
             event.setStatus(OutboxStatus.PENDING);

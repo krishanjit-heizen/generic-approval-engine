@@ -738,9 +738,11 @@ flowchart LR
 ```
 
 **Exempt prefixes:** `/v3/api-docs`, `/swagger-ui`, `/swagger-resources`, `/webjars`,
-`/h2-console`, `/api/v1/admin/applications`. Anything not under `/api/` skips the filter.
-Registration must be exempt — it is where a key comes from — and that openness is a
-local-development affordance, recorded as such rather than treated as a design position.
+`/h2-console`. **Exempt exactly:** `/api/v1/admin/applications`. Anything not under `/api/`
+skips the filter. Registration must be exempt — it is where a key comes from — and that
+openness is a local-development affordance, recorded as such rather than treated as a design
+position. Paths beneath it are not exempt: `rotate-secret` returns a live credential, so it
+requires the application's own key.
 
 **Why an argument resolver** rather than a thread-local or request-scoped bean: tenancy
 becomes visible in every controller signature. A handler that forgot to scope its query
@@ -764,6 +766,10 @@ contract uniform for every response a consumer can receive.
 | `IllegalStateTransitionException` | 409 | `illegal-transition` |
 | `MethodArgumentNotValidException` | 400 | `request-invalid` |
 | `HttpMessageNotReadableException` | 400 | `malformed-json` (cause attached — catches unknown `type` discriminators) |
+| `MethodArgumentTypeMismatchException` | 400 | `parameter-invalid` |
+| `MissingServletRequestParameterException` | 400 | `parameter-required` |
+| `HttpRequestMethodNotSupportedException` | 405 | `method-not-allowed` |
+| `HttpMediaTypeNotSupportedException` | 415 | `unsupported-media-type` |
 | `JsonCodec.JsonCodecException` | 500 | `stored-data-corrupt` |
 | anything else | 500 | `internal-error` + correlation id; stack trace to the log only |
 
@@ -776,7 +782,7 @@ at **warn** (a real race or an engine bug), unexpected at **error**.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/api/v1/admin/applications` | returns `apiKey` + `webhookSecret` **once** |
-| `POST` | `/api/v1/admin/applications/{appId}/rotate-secret` | previous secret stays live |
+| `POST` | `/api/v1/admin/applications/{appId}/rotate-secret` | own key required; previous secret stays live |
 | `GET` | `/api/v1/admin/applications` | never returns secrets |
 | `POST` | `/api/v1/workflows` | body **is** the `WorkflowDocument` |
 | `POST` | `/api/v1/workflows/{key}/versions/{v}/publish` | |
@@ -863,10 +869,10 @@ an illegal transition throws.
 | `CHANGES_REQUESTED` | `IN_PROGRESS`, `CANCELLED` |
 | `NEEDS_ATTENTION` | `IN_PROGRESS`, `CANCELLED` |
 | `APPROVED`/`REJECTED`/`CANCELLED` | *(terminal, permanently)* |
-| `StageStatus.PENDING` | `ACTIVE`, `SKIPPED`, `REJECTED`² |
-| `ACTIVE` | `APPROVED`, `REJECTED`, `EXPIRED`, `RETURNED`, `SKIPPED` |
+| `StageStatus.PENDING` | `ACTIVE`, `SKIPPED`, `REJECTED`², `CANCELLED` |
+| `ACTIVE` | `APPROVED`, `REJECTED`, `EXPIRED`, `RETURNED`, `SKIPPED`, `CANCELLED` |
 | `SKIPPED` | `PENDING`³ |
-| `APPROVED`/`REJECTED`/`RETURNED`/`EXPIRED` | *(terminal for that attempt)* |
+| `APPROVED`/`REJECTED`/`RETURNED`/`EXPIRED`/`CANCELLED` | *(terminal for that attempt)* |
 | `TaskStatus.WAITING` | `PENDING`, `CANCELLED` |
 | `PENDING` | `APPROVED`, `REJECTED`, `CHANGES_REQUESTED`, `EXPIRED`, `CANCELLED` |
 | any other task status | *(terminal — an approver's record is final)* |

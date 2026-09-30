@@ -39,6 +39,9 @@ public enum AuditAction {
     STAGE_EXPIRED,
     STAGE_RETURNED,
 
+    /** The request was withdrawn while this stage was still open. */
+    STAGE_CANCELLED,
+
     /** A revisit created a new attempt of a stage, via GOTO or a resubmission. */
     STAGE_REOPENED,
 

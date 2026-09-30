@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -109,16 +110,24 @@ public class RequestController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ActionBody body) {
 
-        String rawBody = serialize(body);
+        String actor = caller.requireActor();
+
+        // The actor is hashed along with the body: who is acting is part of the intent, so the
+        // same key presented by a different approver is key reuse, not a replay. Without it,
+        // the second approver would be handed the first one's success and never be recorded.
+        Map<String, Object> intent = new LinkedHashMap<String, Object>();
+        intent.put("actor", actor);
+        intent.put("body", body);
         Optional<IdempotencyService.StoredResponse> replay = idempotency.claim(
-                caller.getAppId(), idempotencyKey, "POST /requests/" + requestId + "/actions", rawBody);
+                caller.getAppId(), idempotencyKey, "POST /requests/" + requestId + "/actions",
+                serialize(intent));
         if (replay.isPresent()) {
             return raw(replay.get());
         }
 
         ActionService.ActionResult result;
         try {
-            result = actions.act(caller.getAppId(), requestId, body.toCommand(caller.requireActor()));
+            result = actions.act(caller.getAppId(), requestId, body.toCommand(actor));
         } catch (RuntimeException e) {
             idempotency.release(caller.getAppId(), idempotencyKey);
             throw e;
